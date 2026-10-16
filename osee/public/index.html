@@ -1,0 +1,40 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <meta name="apple-mobile-web-app-title" content="OSEE Remote">
+  <meta name="theme-color" content="#0d0f12">
+  <title>OSEE Switcher Remote</title>
+  <link rel="manifest" href="manifest.webmanifest">
+  <link rel="icon" href="icon.svg" type="image/svg+xml">
+  <link rel="apple-touch-icon" href="icon.svg">
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <header id="topbar">
+    <div class="brand">OSEE <span>Remote</span></div>
+    <div id="devices"></div>
+    <button class="icon-btn" id="add-device" title="Add switcher" aria-label="Add switcher">＋</button>
+    <div class="top-status" id="top-status"></div>
+    <button class="icon-btn" id="open-settings" title="Settings" aria-label="Settings">⚙︎</button>
+  </header>
+  <nav id="tabs">
+    <button data-tab="switch" class="active">Switcher</button>
+    <button data-tab="audio">Audio</button>
+    <button data-tab="record">Record &amp; Stream</button>
+    <button data-tab="macros">Macros</button>
+    <button data-tab="outputs">Outputs</button>
+  </nav>
+  <div id="banner"></div>
+  <main id="view"></main>
+
+  <dialog id="dlg"></dialog>
+  <div class="toast" id="toast"></div>
+
+  <script src="app.js"></script>
+</body>
+</html>

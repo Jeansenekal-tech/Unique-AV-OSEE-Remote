@@ -1,0 +1,159 @@
+name: Build
+
+on:
+  push:
+    branches: [main, master, 'claude/**']
+    tags: ['v*']
+  pull_request:
+  # Actions → Build → Run workflow → type a version (e.g. 1.0.1) to build the
+  # Mac DMGs and the Windows installer and publish a GitHub Release that
+  # installed copies update to automatically. Leave it empty for a test build.
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Release version, e.g. 1.0.1 (empty = test build, no release)'
+        required: false
+        default: ''
+      notes:
+        description: "What's new"
+        required: false
+        default: ''
+
+permissions:
+  contents: read
+
+env:
+  RELEASE_VERSION: ${{ startsWith(github.ref, 'refs/tags/v') && github.ref_name || inputs.version }}
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: npm ci
+      - run: npm test
+
+  mac:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-15        # Apple Silicon
+            arch: arm64
+          - os: macos-15-intel  # Intel
+            arch: x64
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: npm ci
+      - name: Use the release version as the app version
+        if: env.RELEASE_VERSION != ''
+        run: npm version --no-git-tag-version --allow-same-version "${RELEASE_VERSION#v}"
+      - name: Build .dmg + .zip
+        env:
+          MAC_CERT_P12_BASE64: ${{ secrets.MAC_CERT_P12_BASE64 }}
+          MAC_CERT_PASSWORD: ${{ secrets.MAC_CERT_PASSWORD }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: |
+          # Sign + notarise only when the certificate secrets exist; otherwise
+          # build unsigned (scripts/adhoc-sign.cjs ad-hoc signs the app).
+          if [ -n "$MAC_CERT_P12_BASE64" ]; then
+            export CSC_LINK="$MAC_CERT_P12_BASE64" CSC_KEY_PASSWORD="$MAC_CERT_PASSWORD"
+          else
+            export CSC_IDENTITY_AUTO_DISCOVERY=false
+            unset APPLE_ID APPLE_APP_SPECIFIC_PASSWORD APPLE_TEAM_ID
+          fi
+          npx electron-builder --mac --${{ matrix.arch }} --publish never
+      - name: Verify code signature
+        run: |
+          APP=$(ls -d dist/mac*/*.app | head -1)
+          codesign --verify --deep "$APP" && echo "signature OK"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: mac-${{ matrix.arch }}
+          path: |
+            dist/*.dmg
+            dist/*.zip
+          if-no-files-found: error
+
+  windows:
+    runs-on: windows-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: npm ci
+      - name: Use the release version as the app version
+        if: env.RELEASE_VERSION != ''
+        shell: bash
+        run: npm version --no-git-tag-version --allow-same-version "${RELEASE_VERSION#v}"
+      - name: Build installer (.exe)
+        env:
+          # Optional code signing: a base64 .pfx in WIN_CERT_PFX_BASE64.
+          WIN_CERT_PFX_BASE64: ${{ secrets.WIN_CERT_PFX_BASE64 }}
+          WIN_CERT_PASSWORD: ${{ secrets.WIN_CERT_PASSWORD }}
+        shell: bash
+        run: |
+          if [ -n "$WIN_CERT_PFX_BASE64" ]; then
+            export CSC_LINK="$WIN_CERT_PFX_BASE64" CSC_KEY_PASSWORD="$WIN_CERT_PASSWORD"
+          else
+            export CSC_IDENTITY_AUTO_DISCOVERY=false
+          fi
+          npx electron-builder --win --x64 --publish never
+      - uses: actions/upload-artifact@v4
+        with:
+          name: windows-x64
+          path: |
+            dist/*.exe
+            dist/*.exe.blockmap
+            dist/latest.yml
+          if-no-files-found: error
+
+  # Publish a GitHub Release. Installed apps find it through
+  # releases/latest/download (update-mac.json on Mac, latest.yml on Windows).
+  release:
+    if: startsWith(github.ref, 'refs/tags/v') || (github.event_name == 'workflow_dispatch' && inputs.version != '')
+    needs: [test, mac, windows]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+      - name: Release notes and tag
+        id: meta
+        env:
+          NOTES: ${{ inputs.notes }}
+        run: |
+          V="${RELEASE_VERSION#v}"
+          echo "version=$V" >> "$GITHUB_OUTPUT"
+          if [ -n "$NOTES" ]; then printf '%s\n' "$NOTES" > notes.txt; else git log -1 --pretty=%B > notes.txt; fi
+      - run: node scripts/make-update-manifest.mjs dist "${{ steps.meta.outputs.version }}" notes.txt
+      - uses: softprops/action-gh-release@v2
+        with:
+          tag_name: v${{ steps.meta.outputs.version }}
+          target_commitish: ${{ github.sha }}
+          name: Unique AV OSEE Remote ${{ steps.meta.outputs.version }}
+          files: |
+            dist/*.dmg
+            dist/*.zip
+            dist/update-mac.json
+            dist/*.exe
+            dist/*.exe.blockmap
+            dist/latest.yml
+          body_path: notes.txt
